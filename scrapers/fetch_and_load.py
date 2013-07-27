@@ -50,31 +50,35 @@ def fetch_load_xwalk(state):
 
 def fetch_load_shapes(state):
     coll = MONGO_DB['geo_xwalk']
-    st_fips = coll.find_one({'stusps': state.upper()})['st']
+    county_fips = coll.find({'stusps': state.upper()}).distinct('cty')
     u = 'http://www2.census.gov/geo/tiger/TIGER2010/TABBLOCK/2010'
-    url = '%s/tl_2010_%s_tabblock10.zip' % (u, st_fips)
-    req = requests.get(url)
-    if req.status_code != 200:
-        print 'Unable to fetch census block shape data for %s' % state.upper()
-    else:
-        zf = StringIO(req.content)
-        shp = StringIO()
-        dbf = StringIO()
-        shx = StringIO()
-        with zipfile.ZipFile(zf) as f:
-            for name in f.namelist():
-                if name.endswith('.shp'):
-                    shp.write(f.read(name))
-                if name.endswith('.shx'):
-                    shx.write(f.read(name))
-                if name.endswith('.dbf'):
-                    dbf.write(f.read(name))
-        shape_reader = shapefile.Reader(shp=shp, dbf=dbf, shx=shx)
-        records = shape_reader.shapeRecords()
-        for record in records:
-            geoid = record.record[4]
-            geo_xwalk = coll.find_one({'tabblk2010': geoid})['_id']
-            coll.update({'_id': geo_xwalk}, {'$set': {'geojson': record.shape.__geo_interface__}})
+    for county in county_fips:
+        url = '%s/tl_2010_%s_tabblock10.zip' % (u, county)
+        req = requests.get(url)
+        if req.status_code != 200:
+            print 'Unable to fetch census block shape data for %s' % state.upper()
+        else:
+            zf = StringIO(req.content)
+            shp = StringIO()
+            dbf = StringIO()
+            shx = StringIO()
+            with zipfile.ZipFile(zf) as f:
+                for name in f.namelist():
+                    if name.endswith('.shp'):
+                        shp.write(f.read(name))
+                    if name.endswith('.shx'):
+                        shx.write(f.read(name))
+                    if name.endswith('.dbf'):
+                        dbf.write(f.read(name))
+            shape_reader = shapefile.Reader(shp=shp, dbf=dbf, shx=shx)
+            records = shape_reader.shapeRecords()
+            record_groups = grouper(records, 1000)
+            for records in record_groups:
+                for record in records:
+                    if record:
+                        geoid = record.record[4]
+                        geo_xwalk = coll.find_one({'tabblk2010': geoid})['_id']
+                        coll.update({'_id': geo_xwalk}, {'$set': {'geojson': record.shape.__geo_interface__}})
         coll.ensure_index([('geojson', pymongo.GEOSPHERE)])
 
 def fetch_load(year, state):
